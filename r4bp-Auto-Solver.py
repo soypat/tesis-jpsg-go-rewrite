@@ -595,7 +595,7 @@ def iterar_parametros():
     d0_vals = [37000]
     
     # Crear todas las combinaciones 
-    parametros = list(product(phis,phiS0,d0_vals, jacobi_threshold  ))
+    parametros = list(product(phis, phiS0, d0_vals, jacobi_threshold))
     
     resultados=[]
     async_results = []
