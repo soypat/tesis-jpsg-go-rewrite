@@ -636,5 +636,10 @@ def iterar_parametros():
 #  Ejecución principal
 ########################
 if __name__ == '__main__':
-    df_resultados = iterar_parametros()
-    print(df_resultados)
+    # df_resultados = iterar_parametros()
+    phi = 295.5
+    phiS0 = 30 # [deg]
+    d0 = 37000
+    jacobit = -1.639
+    res = trayectoria((phi, phiS0, d0, jacobit))
+    print(res)

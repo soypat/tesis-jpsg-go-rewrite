@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"math"
+	"time"
 
 	"github.com/soypat/geometry/md3"
 )
@@ -217,13 +219,18 @@ func EventJacobi(threshold float64) EventFunc {
 }
 
 // EventL1 returns event function for L1 crossing within y-window.
+// Matches Python lagranian1 logic exactly.
 func EventL1(yWindow float64) EventFunc {
 	return func(t float64, s State, phiS0 float64) float64 {
 		dx := s.Pos.X - L1x
-		if math.Abs(s.Pos.Y) <= yWindow {
+		absY := math.Abs(s.Pos.Y)
+		if absY <= yWindow {
 			return dx
 		}
-		margin := math.Abs(s.Pos.Y) - yWindow + 1e-6
+		// Outside window: maintain sign of dx but with offset
+		// This is continuous at boundary and only crosses zero when inside window
+		eps := 1e-6
+		margin := absY - yWindow + eps
 		if dx >= 0 {
 			return margin
 		}
@@ -315,7 +322,7 @@ func (ig *Integrator) Step(h float64) float64 {
 
 		for i := 1; i < 7; i++ {
 			ti := t + dpC[i]*h
-			si := State{Mass: s.Mass}
+			var si State
 
 			for j := 0; j < i; j++ {
 				si.Pos = md3.Add(si.Pos, md3.Scale(h*dpA[i][j], kPos[j]))
@@ -467,6 +474,7 @@ func bisectEvent(t0, t1 float64, s0, s1 State, phiS0 float64, ev EventFunc) floa
 
 // Calculate runs the full three-phase trajectory simulation.
 func (tr *Trajectory) Calculate() Result {
+	startTime := time.Now()
 	result := Result{}
 	state := tr.InitialState()
 	phiS0 := tr.PhiS0
@@ -485,10 +493,16 @@ func (tr *Trajectory) Calculate() Result {
 
 	tf1 := float64(days * 360 * 4) // 4 years max
 	evJacobi := EventJacobi(tr.JacobiThr)
-	evIdx, _ := ig.IntegrateUntil(tf1, []EventFunc{evJacobi})
+	evIdx, evTime := ig.IntegrateUntil(tf1, []EventFunc{evJacobi})
 
-	if evIdx < 0 {
-		// Never reached Jacobi threshold
+	fmt.Printf("Fase 1 completada, t_eventos: [array([%.8f])]\n", evTime)
+	if evIdx >= 0 {
+		s := ig.State
+		fmt.Printf("[Fase 1] Evento jacobiC_local disparado en t = [%.8f] con Jacobi\n", evTime)
+		fmt.Printf("[Fase 1] Estado en evento: [[ %.8e %.8e %.8e %.8e\n   %.8e]]\n",
+			s.Pos.X, s.Pos.Y, s.Vel.X, s.Vel.Y, s.Mass)
+	} else {
+		fmt.Println("[Fase 1] No se disparó el evento jacobiC_local")
 		result.TotalTime = ig.T
 		result.FinalMass = ig.State.Mass
 		return result
@@ -496,20 +510,24 @@ func (tr *Trajectory) Calculate() Result {
 	t1 := ig.T // Cumulative time after phase 1
 
 	// Phase 2: Coast until L1
-	// Adjust phiS0 to maintain Sun position continuity with cumulative time
 	ig.PhiS0 = phiS0 - (nS-W)*t1
 	ig.Rates = RatesCoast
 
 	tf2 := ig.T + float64(days*650)
 	evL1 := EventL1(55000)
-	evIdx, _ = ig.IntegrateUntil(tf2, []EventFunc{evL1})
+	evIdx, evTime = ig.IntegrateUntil(tf2, []EventFunc{evL1})
 
+	fmt.Printf("Fase 2 completada, tiempo de evento: [array([%.8f])]\n", evTime)
+	fmt.Printf("[Fase 2] Estado: pos=(%.2f, %.2f), vel=(%.6f, %.6f), L1x=%.2f\n",
+		ig.State.Pos.X, ig.State.Pos.Y, ig.State.Vel.X, ig.State.Vel.Y, L1x)
 	if evIdx < 0 {
+		fmt.Println("No se logró llegar a L1")
 		result.TotalTime = ig.T
 		result.FinalMass = ig.State.Mass
 		result.ReachedL1 = false
 		return result
 	}
+	fmt.Println("Se alcanzo L1 CORRECTAMENTE")
 	result.ReachedL1 = true
 	t2 := ig.T // Cumulative time after phase 2
 
@@ -521,33 +539,60 @@ func (tr *Trajectory) Calculate() Result {
 	evJacobiC1 := EventJacobi(C1)
 	evIdx, _ = ig.IntegrateUntil(tf3, []EventFunc{evJacobiC1, EventCollision, EventCapture})
 
-	// Check results
-	minDist := DistanceToMoon(ig.State.Pos)
-	result.InSOI = minDist <= 55000
+	// Check capture condition (E < 0 throughout phase 3)
+	rRel := DistanceToMoon(ig.State.Pos)
+	v2 := md3.Norm2(ig.State.Vel)
+	E := 0.5*v2 - mu2/rRel
+
+	if E < 0 {
+		fmt.Printf("La condición de captura (E < 0) se cumple - phi %.1f\n", tr.Phi*180/math.Pi)
+		result.Captured = true
+	} else {
+		fmt.Printf("La condición de captura NO - %.1f\n", tr.Phi*180/math.Pi)
+	}
+
+	result.InSOI = rRel <= 55000
 
 	switch evIdx {
 	case 1: // Collision
 		result.Collided = true
-	case 2: // Capture
-		result.Captured = true
+		fmt.Printf("Choco la LUNA phi - %.1f\n", tr.Phi*180/math.Pi)
 	}
 
 	result.TotalTime = ig.T
 	result.FinalMass = ig.State.Mass
+
+	execTime := time.Since(startTime).Seconds()
+	fmt.Printf("{'phi': %.1f, 'jacobi_thr': %.3f, 'phiS0': %.0f, 'd0': %.0f, 'tiempo_total': %.8f, 'masa_final': %.8f, 'exito': %v, 'SOI': %v, 'time_exec': %.6f}\n",
+		tr.Phi*180/math.Pi, tr.JacobiThr, tr.PhiS0*180/math.Pi, tr.D0,
+		result.TotalTime/float64(days), result.FinalMass,
+		result.Captured, result.InSOI, execTime)
+
 	return result
 }
 
 func main() {
+	// Print derived constants for comparison with Python
+	fmt.Printf("Constants: W=%.10e, nS=%.10e, mu=%.2f, muS=%.10e\n", W, nS, mu, muS)
+	fmt.Printf("Positions: x1=%.2f, x2=%.2f, L1x=%.2f\n", x1, x2, L1x)
+
+	// Match Python: phi=295.5, phiS0=30, d0=37000, jacobi_thr=-1.639
 	tr := Trajectory{
 		D0:        37000,
-		Phi:       295 * math.Pi / 180,
+		Phi:       295.5 * math.Pi / 180, // [rad]
 		Gamma:     0,
-		PhiS0:     0,
+		PhiS0:     30 * math.Pi / 180, // [rad]
 		M0:        12,
 		Thruster:  Thruster{Thrust: 4 * 0.00000045, Isp: 1650},
 		JacobiThr: -1.639,
 		Tol:       1e-12,
 		MaxStep:   450,
 	}
-	_ = tr.Calculate()
+
+	// Print initial state for comparison
+	s0 := tr.InitialState()
+	fmt.Printf("Initial state: pos=(%.2f, %.2f), vel=(%.6f, %.6f), mass=%.2f\n",
+		s0.Pos.X, s0.Pos.Y, s0.Vel.X, s0.Vel.Y, s0.Mass)
+
+	tr.Calculate()
 }
