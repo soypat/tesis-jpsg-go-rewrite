@@ -159,7 +159,7 @@ func RatesThrust(th Thruster) RatesFunc {
 
 		dVel = md3.Add(md3.Add(aGrav, aCoriolis), md3.Add(aCentrifugal, aThrust))
 		dm = th.MassRate()
-		return
+		return dPos, dVel, dm
 	}
 }
 
@@ -172,7 +172,7 @@ func RatesCoast(t float64, s State, phiS0 float64) (dPos, dVel md3.Vec, dm float
 	aCentrifugal := md3.Vec{X: W * W * s.Pos.X, Y: W * W * s.Pos.Y, Z: 0}
 
 	dVel = md3.Add(md3.Add(aGrav, aCoriolis), aCentrifugal)
-	return
+	return dPos, dVel, dm
 }
 
 // RatesBrake returns derivatives with thrust opposing velocity.
@@ -189,7 +189,7 @@ func RatesBrake(th Thruster) RatesFunc {
 
 		dVel = md3.Add(md3.Add(aGrav, aCoriolis), md3.Add(aCentrifugal, aThrust))
 		dm = th.MassRate()
-		return
+		return dPos, dVel, dm
 	}
 }
 
