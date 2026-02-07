@@ -100,48 +100,6 @@ Go uses 4.5× larger integration steps during phases 2 and 3. This could reduce 
 
 ---
 
-## 🟡 Secondary Issue: L1 Event Function Behavior Difference
-
-### Location
-- `r4bp-Auto-Solver.py` lines 114-130
-- `rewrite.go` lines 223-235
-
-### Description
-The L1 event functions handle out-of-window cases differently:
-
-**Python (preserves sign):**
-```python
-if abs(y_val) <= Y_WINDOW_L1:
-    return s  # Distance from L1
-margin = (abs(y_val) - Y_WINDOW_L1) + eps
-return (1.0 if s >= 0.0 else -1.0) * margin  # Sign based on x position
-```
-
-**Go (always positive outside window):**
-```go
-if absY <= yWindow {
-    return dx  // Distance from L1
-}
-return absY - yWindow + math.Abs(dx) + 1  // Always positive
-```
-
-### Test Results
-| Spacecraft Position | Python Returns | Go Returns |
-|--------------------|----------------|------------|
-| Inside window, before L1 | -17039 | -17039 |
-| Inside window, past L1 | +2961 | +2961 |
-| **Outside window, before L1** | **-5000** | **+22040** |
-| Outside window, past L1 | +5000 | +7962 |
-
-### Impact
-When spacecraft is outside y-window and before L1:
-- Python returns **negative** (maintains sign continuity)
-- Go returns **positive** (could cause spurious sign change detection)
-
-This could cause Go to incorrectly detect an L1 "event" when the spacecraft enters the y-window.
-
----
-
 ## 🟡 Minor Issue: Error Norm Calculation
 
 ### Location
@@ -222,8 +180,7 @@ def jacobiC_local(t, state, phiS0):
 
 ### Additional Fixes for Go
 1. Update max_step for phases 2&3 to match Python (100s)
-2. Fix L1 event function to preserve sign outside y-window
-3. Consider using 5 instead of 7 in error norm calculation
+2. Consider using 5 instead of 7 in error norm calculation (minor impact)
 
 ---
 
@@ -232,3 +189,67 @@ def jacobiC_local(t, state, phiS0):
 The primary cause of discrepancy is **Python's buggy Jacobi event function** that uses the initial sun angle instead of the time-evolved position. This bug happens to produce favorable trajectory conditions for the test parameters (phi=295.5°, phiS0=30°), allowing successful lunar capture.
 
 Go's mathematically correct implementation finds a different solution that does not achieve capture with these parameters. To replicate Python's results, Go would need to intentionally reproduce the bug.
+
+---
+
+## Audit Notes
+
+**Audited:** 2026-01-19
+
+**Verification Status:**
+| Section | Status |
+|---------|--------|
+| Primary Bug (Jacobi event) | ✅ Verified correct |
+| Sun Discontinuity | ✅ Verified correct |
+| Step Size Differences | ✅ Verified correct |
+| L1 Event Function | ✅ Corrected (was citing wrong code) |
+| Error Norm Calculation | ✅ Verified correct |
+| Constants | ✅ All values verified |
+| Physics Equations | ✅ CR3BP+Sun formulation correct |
+
+**Key Finding:** The primary conclusion stands — Python's Jacobi event bug using the initial sun angle (instead of time-evolved) is the root cause of trajectory divergence between implementations.
+
+
+
+## ✅ L1 Event Function (No Discrepancy)
+
+### Location
+- `r4bp-Auto-Solver.py` lines 114-130
+- `rewrite.go` lines 223-238
+
+### Description
+Both implementations handle out-of-window cases **identically**, preserving sign continuity:
+
+**Python:**
+```python
+if abs(y_val) <= Y_WINDOW_L1:
+    return s  # Distance from L1
+margin = (abs(y_val) - Y_WINDOW_L1) + eps
+return (1.0 if s >= 0.0 else -1.0) * margin  # Sign based on x position
+```
+
+**Go (matches Python behavior):**
+```go
+if absY <= yWindow {
+    return dx  // Distance from L1
+}
+eps := 1e-6
+margin := absY - yWindow + eps
+if dx >= 0 {
+    return margin
+}
+return -margin  // Preserves sign like Python
+```
+
+### Test Results
+| Spacecraft Position | Python Returns | Go Returns | Match |
+|--------------------|----------------|------------|-------|
+| Inside window, before L1 | -17039 | -17039 | ✅ |
+| Inside window, past L1 | +2961 | +2961 | ✅ |
+| Outside window, before L1 | -5000 | -5000 | ✅ |
+| Outside window, past L1 | +5000 | +5000 | ✅ |
+
+### Impact
+**None** — both implementations behave identically. This is NOT a source of discrepancy.
+
+---
