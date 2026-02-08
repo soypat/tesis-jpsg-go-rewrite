@@ -1,3 +1,6 @@
 /traj
 *.csv
 go.sum
+
+3brp
+/__pycache__

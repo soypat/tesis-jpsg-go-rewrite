@@ -1,0 +1,1 @@
+When running Go code use `go run PATH`. Do not build binary artifacts. Use `go vet PATH` to check if the package compiles. Do not use `go build`
