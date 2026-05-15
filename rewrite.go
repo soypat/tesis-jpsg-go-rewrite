@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"math"
+	"os"
 	"time"
 
 	"github.com/soypat/geometry/md3"
@@ -572,27 +574,48 @@ func (tr *Trajectory) Calculate() Result {
 }
 
 func main() {
-	// Print derived constants for comparison with Python
-	fmt.Printf("Constants: W=%.10e, nS=%.10e, mu=%.2f, muS=%.10e\n", W, nS, mu, muS)
-	fmt.Printf("Positions: x1=%.2f, x2=%.2f, L1x=%.2f\n", x1, x2, L1x)
+	prog := os.Args[len(os.Args)-1]
+	switch prog {
+	case "paredes":
+		RunParedes()
+	case "r4bp":
+		// Print derived constants for comparison with Python
+		fmt.Printf("Constants: W=%.10e, nS=%.10e, mu=%.2f, muS=%.10e\n", W, nS, mu, muS)
+		fmt.Printf("Positions: x1=%.2f, x2=%.2f, L1x=%.2f\n", x1, x2, L1x)
 
-	// Match Python: phi=295.5, phiS0=30, d0=37000, jacobi_thr=-1.639
-	tr := Trajectory{
-		D0:        37000,
-		Phi:       295.5 * math.Pi / 180, // [rad]
-		Gamma:     0,
-		PhiS0:     30 * math.Pi / 180, // [rad]
-		M0:        12,
-		Thruster:  Thruster{Thrust: 4 * 0.00000045, Isp: 1650},
-		JacobiThr: -1.639,
-		Tol:       1e-12,
-		MaxStep:   450,
+		// Match Python: phi=295.5, phiS0=30, d0=37000, jacobi_thr=-1.639
+		tr := Trajectory{
+			D0:        37000,
+			Phi:       295.5 * math.Pi / 180, // [rad]
+			Gamma:     0,
+			PhiS0:     30 * math.Pi / 180, // [rad]
+			M0:        12,
+			Thruster:  Thruster{Thrust: 4 * 0.00000045, Isp: 1650},
+			JacobiThr: -1.639,
+			Tol:       1e-12,
+			MaxStep:   450,
+		}
+
+		// Print initial state for comparison
+		s0 := tr.InitialState()
+		fmt.Printf("Initial state: pos=(%.2f, %.2f), vel=(%.6f, %.6f), mass=%.2f\n",
+			s0.Pos.X, s0.Pos.Y, s0.Vel.X, s0.Vel.Y, s0.Mass)
+
+		tr.Calculate()
+	default:
+		log.Fatal("last arg must be name of program to run")
 	}
+}
 
-	// Print initial state for comparison
-	s0 := tr.InitialState()
-	fmt.Printf("Initial state: pos=(%.2f, %.2f), vel=(%.6f, %.6f), mass=%.2f\n",
-		s0.Pos.X, s0.Pos.Y, s0.Vel.X, s0.Vel.Y, s0.Mass)
+const debugOn = true
 
-	tr.Calculate()
+func debugf(format string, args ...any) {
+	if debugOn {
+		fmt.Fprintf(os.Stdout, format, args...)
+	}
+}
+func debugln(args ...any) {
+	if debugOn {
+		fmt.Fprintln(os.Stdout, args...)
+	}
 }
