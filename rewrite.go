@@ -300,6 +300,16 @@ var (
 	}
 )
 
+// fma3 computes acc + coeff*v using math.FMA per component.
+// Mirrors numpy BLAS dot-product accumulation: A[j]*K[j] + acc (no intermediate round).
+func fma3(acc md3.Vec, coeff float64, v md3.Vec) md3.Vec {
+	return md3.Vec{
+		X: math.FMA(coeff, v.X, acc.X),
+		Y: math.FMA(coeff, v.Y, acc.Y),
+		Z: math.FMA(coeff, v.Z, acc.Z),
+	}
+}
+
 // Step performs a single RK45 step with adaptive step size.
 // Returns the new suggested step size.
 func (ig *Integrator) Step(h float64) float64 {
@@ -323,56 +333,62 @@ func (ig *Integrator) Step(h float64) float64 {
 		kPos[0], kVel[0], kM[0] = rates(t, s, phiS0)
 
 		for i := 1; i < 7; i++ {
-			ti := t + dpC[i]*h
-			var si State
-
+			// Match numpy: dy = dot(A[i,:i], K[:i]) * h  (FMA in the dot, h applied after)
+			var sumPos, sumVel md3.Vec
+			var sumMass float64
 			for j := 0; j < i; j++ {
-				si.Pos = md3.Add(si.Pos, md3.Scale(h*dpA[i][j], kPos[j]))
-				si.Vel = md3.Add(si.Vel, md3.Scale(h*dpA[i][j], kVel[j]))
-				si.Mass += h * dpA[i][j] * kM[j]
+				sumPos = fma3(sumPos, dpA[i][j], kPos[j])
+				sumVel = fma3(sumVel, dpA[i][j], kVel[j])
+				sumMass = math.FMA(dpA[i][j], kM[j], sumMass)
 			}
-			si.Pos = md3.Add(s.Pos, si.Pos)
-			si.Vel = md3.Add(s.Vel, si.Vel)
-			si.Mass += s.Mass
-
+			ti := t + dpC[i]*h
+			si := State{
+				Pos:  md3.Add(s.Pos, md3.Scale(h, sumPos)),
+				Vel:  md3.Add(s.Vel, md3.Scale(h, sumVel)),
+				Mass: s.Mass + h*sumMass,
+			}
 			kPos[i], kVel[i], kM[i] = rates(ti, si, phiS0)
 		}
 
-		// Compute 5th order solution and error estimate
-		var newPos, newVel, errPos, errVel md3.Vec
-		var newM, errM float64
-
+		// Compute 5th order solution and error estimate.
+		// Match numpy: y_new = y + h*dot(B,K),  err = h*dot(E,K)
+		// Use standard += (two rounds per term) to match numpy's non-FMA C-loop accumulation.
+		var sumBPos, sumBVel, sumEPos, sumEVel md3.Vec
+		var sumBM, sumEM float64
 		for i := 0; i < 7; i++ {
-			newPos = md3.Add(newPos, md3.Scale(h*dpB[i], kPos[i]))
-			newVel = md3.Add(newVel, md3.Scale(h*dpB[i], kVel[i]))
-			newM += h * dpB[i] * kM[i]
-
-			errPos = md3.Add(errPos, md3.Scale(h*dpE[i], kPos[i]))
-			errVel = md3.Add(errVel, md3.Scale(h*dpE[i], kVel[i]))
-			errM += h * dpE[i] * kM[i]
+			sumBPos.X += dpB[i] * kPos[i].X
+			sumBPos.Y += dpB[i] * kPos[i].Y
+			sumBVel.X += dpB[i] * kVel[i].X
+			sumBVel.Y += dpB[i] * kVel[i].Y
+			sumBM += dpB[i] * kM[i]
+			sumEPos.X += dpE[i] * kPos[i].X
+			sumEPos.Y += dpE[i] * kPos[i].Y
+			sumEVel.X += dpE[i] * kVel[i].X
+			sumEVel.Y += dpE[i] * kVel[i].Y
+			sumEM += dpE[i] * kM[i]
 		}
+		newPos := md3.Add(s.Pos, md3.Scale(h, sumBPos))
+		newVel := md3.Add(s.Vel, md3.Scale(h, sumBVel))
+		newM := s.Mass + h*sumBM
+		errPos := md3.Scale(h, sumEPos)
+		errVel := md3.Scale(h, sumEVel)
+		errM := h * sumEM
 
-		newPos = md3.Add(s.Pos, newPos)
-		newVel = md3.Add(s.Vel, newVel)
-		newM += s.Mass
-
-		// Error norm — per-component scaling matches scipy's default RK45 behaviour.
-		// scale_i = ATol + RTol * max(|y_i|, |y_i_new|)
+		// Error norm — per-component scaling, n=5 state components (x,y,vx,vy,m).
+		// All Python models use a 5-component 2D state; z and vz are always zero
+		// so their error contributions are exactly zero and would only dilute the
+		// denominator (7 vs 5), inflating step sizes by sqrt(5/7)≈15%.
 		scPX := ig.ATol + ig.RTol*math.Max(math.Abs(s.Pos.X), math.Abs(newPos.X))
 		scPY := ig.ATol + ig.RTol*math.Max(math.Abs(s.Pos.Y), math.Abs(newPos.Y))
-		scPZ := ig.ATol + ig.RTol*math.Max(math.Abs(s.Pos.Z), math.Abs(newPos.Z))
 		scVX := ig.ATol + ig.RTol*math.Max(math.Abs(s.Vel.X), math.Abs(newVel.X))
 		scVY := ig.ATol + ig.RTol*math.Max(math.Abs(s.Vel.Y), math.Abs(newVel.Y))
-		scVZ := ig.ATol + ig.RTol*math.Max(math.Abs(s.Vel.Z), math.Abs(newVel.Z))
 		scaleM := ig.ATol + ig.RTol*math.Max(math.Abs(s.Mass), math.Abs(newM))
 
-		errNorm := math.Sqrt(((errPos.X/scPX)*(errPos.X/scPX)+
-			(errPos.Y/scPY)*(errPos.Y/scPY)+
-			(errPos.Z/scPZ)*(errPos.Z/scPZ)+
-			(errVel.X/scVX)*(errVel.X/scVX)+
-			(errVel.Y/scVY)*(errVel.Y/scVY)+
-			(errVel.Z/scVZ)*(errVel.Z/scVZ)+
-			(errM/scaleM)*(errM/scaleM))/7)
+		errNorm := math.Sqrt(((errPos.X/scPX)*(errPos.X/scPX) +
+			(errPos.Y/scPY)*(errPos.Y/scPY) +
+			(errVel.X/scVX)*(errVel.X/scVX) +
+			(errVel.Y/scVY)*(errVel.Y/scVY) +
+			(errM/scaleM)*(errM/scaleM)) / 5)
 
 		// Step accepted?
 		if errNorm <= 1 {

@@ -43,18 +43,22 @@ type GTOResult struct {
 }
 
 // AccelEM computes gravitational acceleration from Earth and Moon only (no Sun).
-// Equivalent to the gravity terms in the Python rates/rates0/rates_1 functions.
+// Distances use sqrt(X*X + Y*Y) to match Python's np.linalg.norm([X, Y]).
+// The Y-component uses (mu1/r1³ + mu2/r2³)*y to match Python's factor-then-scale.
 func AccelEM(pos md3.Vec) md3.Vec {
-	rToEarth := md3.Sub(pos, md3.Vec{X: x1})
-	rToMoon := md3.Sub(pos, md3.Vec{X: x2})
-	d1 := md3.Norm(rToEarth)
-	d2 := md3.Norm(rToMoon)
+	dx1 := pos.X - x1
+	dx2 := pos.X - x2
+	d1 := math.Sqrt(dx1*dx1 + pos.Y*pos.Y) // matches: np.linalg.norm([x+pi2*r12, y])
+	d2 := math.Sqrt(dx2*dx2 + pos.Y*pos.Y) // matches: np.linalg.norm([x-pi1*r12, y])
 	d1_3 := d1 * d1 * d1
 	d2_3 := d2 * d2 * d2
-	return md3.Add(
-		md3.Scale(-mu1/d1_3, rToEarth),
-		md3.Scale(-mu2/d2_3, rToMoon),
-	)
+	// X: each term is separate — matches Python's: - mu1*(x-x1)/r1³ - mu2*(x-x2)/r2³
+	// Y: combined rate*(y) — matches Python's: - (mu1/r1³ + mu2/r2³)*y
+	gY := -(mu1/d1_3 + mu2/d2_3) * pos.Y
+	return md3.Vec{
+		X: -mu1/d1_3*dx1 - mu2/d2_3*dx2,
+		Y: gY,
+	}
 }
 
 // JacobiConstantEM computes the Jacobi constant for the Earth+Moon CR3BP (no Sun).
@@ -67,46 +71,66 @@ func JacobiConstantEM(s State) float64 {
 	return 0.5*v2 - 0.5*W*W*(pos.X*pos.X+pos.Y*pos.Y) - mu1/d1 - mu2/d2
 }
 
+// paredesGravity computes distances and per-body gravity coefficients used by
+// all three rates functions. Matches Python's np.linalg.norm and r**3 style.
+func paredesGravity(x, y float64) (r1_3, r2_3 float64) {
+	dx1 := x - x1
+	dx2 := x - x2
+	r1 := math.Sqrt(dx1*dx1 + y*y) // np.linalg.norm([x+pi2*r12, y])
+	r2 := math.Sqrt(dx2*dx2 + y*y) // np.linalg.norm([x-pi1*r12, y])
+	return r1 * r1 * r1, r2 * r2 * r2
+}
+
 // RatesThrustEM returns a RatesFunc for prograde thrust in Earth+Moon CR3BP.
-// Matches Python rates(t, f): thrust aligned along velocity.
+// Mirrors Python rates(t,f) sequential left-to-right evaluation exactly:
+//
+//	ax = 2*W*vy + W²*x - mu1*(x-x1)/r1³ - mu2*(x-x2)/r2³ + (T/m)*(vx/v)
+//	ay = -2*W*vx + W²*y - (mu1/r1³ + mu2/r2³)*y + (T/m)*(vy/v)
 func RatesThrustEM(th Thruster) RatesFunc {
 	return func(t float64, s State, _ float64) (dPos, dVel md3.Vec, dm float64) {
+		x, y := s.Pos.X, s.Pos.Y
+		vx, vy, m := s.Vel.X, s.Vel.Y, s.Mass
+		r1_3, r2_3 := paredesGravity(x, y)
+		v := math.Sqrt(vx*vx + vy*vy) // np.linalg.norm([vx, vy])
+		tmv := th.Thrust / (m * v)
+		// Python sequential left-to-right for each axis:
+		ax := ((2*W*vy + W*W*x) - mu1*(x-x1)/r1_3) - mu2*(x-x2)/r2_3 + tmv*vx
+		ay := (-2*W*vx + W*W*y) - (mu1/r1_3+mu2/r2_3)*y + tmv*vy
 		dPos = s.Vel
-		aGrav := AccelEM(s.Pos)
-		aCoriolis := md3.Vec{X: 2 * W * s.Vel.Y, Y: -2 * W * s.Vel.X}
-		aCentrifugal := md3.Vec{X: W * W * s.Pos.X, Y: W * W * s.Pos.Y}
-		v := md3.Norm(s.Vel)
-		aThrust := md3.Scale(th.Thrust/(s.Mass*v), s.Vel)
-		dVel = md3.Add(md3.Add(aGrav, aCoriolis), md3.Add(aCentrifugal, aThrust))
+		dVel = md3.Vec{X: ax, Y: ay}
 		dm = th.MassRate()
-		return dPos, dVel, dm
+		return
 	}
 }
 
 // RatesCoastEM is a RatesFunc for unpowered coasting in Earth+Moon CR3BP.
-// Matches Python rates0(t, f). phiS0 is unused (no Sun).
+// Mirrors Python rates0(t,f) sequential left-to-right evaluation exactly.
 func RatesCoastEM(t float64, s State, _ float64) (dPos, dVel md3.Vec, dm float64) {
+	x, y := s.Pos.X, s.Pos.Y
+	vx, vy := s.Vel.X, s.Vel.Y
+	r1_3, r2_3 := paredesGravity(x, y)
+	ax := ((2*W*vy + W*W*x) - mu1*(x-x1)/r1_3) - mu2*(x-x2)/r2_3
+	ay := (-2*W*vx + W*W*y) - (mu1/r1_3+mu2/r2_3)*y
 	dPos = s.Vel
-	aGrav := AccelEM(s.Pos)
-	aCoriolis := md3.Vec{X: 2 * W * s.Vel.Y, Y: -2 * W * s.Vel.X}
-	aCentrifugal := md3.Vec{X: W * W * s.Pos.X, Y: W * W * s.Pos.Y}
-	dVel = md3.Add(md3.Add(aGrav, aCoriolis), aCentrifugal)
-	return dPos, dVel, 0
+	dVel = md3.Vec{X: ax, Y: ay}
+	return
 }
 
 // RatesBrakeEM returns a RatesFunc for retrograde braking in Earth+Moon CR3BP.
-// Matches Python rates_1(t, f): thrust opposes velocity.
+// Mirrors Python rates_1(t,f) sequential left-to-right evaluation exactly.
 func RatesBrakeEM(th Thruster) RatesFunc {
 	return func(t float64, s State, _ float64) (dPos, dVel md3.Vec, dm float64) {
+		x, y := s.Pos.X, s.Pos.Y
+		vx, vy, m := s.Vel.X, s.Vel.Y, s.Mass
+		r1_3, r2_3 := paredesGravity(x, y)
+		v := math.Sqrt(vx*vx + vy*vy)
+		tmv := -th.Thrust / (m * v) // negative: retrograde
+		ax := ((2*W*vy + W*W*x) - mu1*(x-x1)/r1_3) - mu2*(x-x2)/r2_3 + tmv*vx
+		ay := (-2*W*vx + W*W*y) - (mu1/r1_3+mu2/r2_3)*y + tmv*vy
 		dPos = s.Vel
-		aGrav := AccelEM(s.Pos)
-		aCoriolis := md3.Vec{X: 2 * W * s.Vel.Y, Y: -2 * W * s.Vel.X}
-		aCentrifugal := md3.Vec{X: W * W * s.Pos.X, Y: W * W * s.Pos.Y}
-		v := md3.Norm(s.Vel)
-		aThrust := md3.Scale(-th.Thrust/(s.Mass*v), s.Vel)
-		dVel = md3.Add(md3.Add(aGrav, aCoriolis), md3.Add(aCentrifugal, aThrust))
+		dVel = md3.Vec{X: ax, Y: ay}
 		dm = th.MassRate()
-		return dPos, dVel, dm
+		return
 	}
 }
 
@@ -287,6 +311,24 @@ func (cfg *GTOConfig) Calculate() GTOResult {
 			nextP1 += 20 * days
 		}
 	}
+
+	// Bit-level step comparison: log-spaced indices for binary-search of first divergence.
+	p1stepIdxs := []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+		20, 30, 50, 100, 200, 500, 1000, 2000, 5000, 10000, len(p1) - 1}
+	seen := map[int]bool{}
+	for _, idx := range p1stepIdxs {
+		if idx >= 0 && idx < len(p1) && !seen[idx] {
+			seen[idx] = true
+			r := p1[idx]
+			var h float64
+			if idx > 0 {
+				h = r.T - p1[idx-1].T
+			}
+			debugf("[P1 s%5d] t=%.17e h=%.6e x=%.17e y=%.17e vx=%.17e vy=%.17e m=%.17e\n",
+				idx, r.T, h, r.Pos.X, r.Pos.Y, r.Vel.X, r.Vel.Y, r.Mass)
+		}
+	}
+
 	if evIdx < 0 {
 		result.TotalTime = ig.T
 		result.FinalMass = ig.State.Mass

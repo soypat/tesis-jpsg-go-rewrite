@@ -320,6 +320,15 @@ def trayectoria():
             print(f"[P1 t={t/days:7.2f}d] x={sol1.y[0,i]:.8e} y={sol1.y[1,i]:.8e} vx={sol1.y[2,i]:.8e} vy={sol1.y[3,i]:.8e}")
             next_p1 += 20 * days
 
+    # Bit-level step comparison: log-spaced indices matching Go's [P1 sNNNNN] prints.
+    p1_debug_idx = list(range(15)) + [20, 30, 50, 100, 200, 500, 1000, 2000, 5000, 10000, len(sol1.t)-1]
+    for idx in sorted(set(p1_debug_idx)):
+        if idx < len(sol1.t):
+            t = sol1.t[idx]
+            s = sol1.y[:, idx]
+            h = t - sol1.t[idx-1] if idx > 0 else 0.0
+            print(f"[P1 s{idx:5d}] t={t:.17e} h={h:.6e} x={s[0]:.17e} y={s[1]:.17e} vx={s[2]:.17e} vy={s[3]:.17e} m={s[4]:.17e}")
+
     # Fase 2: Coasting (motores apagados)
     t_phase2 = [sol1.t[-1], sol1.t[-1] + days * 650]
     sol2 = solve_ivp(rates0, t_phase2, f1_final, method='RK45', events=lagrian1,
