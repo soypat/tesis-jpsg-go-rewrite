@@ -241,7 +241,7 @@ def animar_trayectoria_dual(sols, t_threshold, chunk_interval_initial=2, chunk_i
         indices = np.where(tiempos <= t_frame)[0]
         traj_line.set_data(x_total[indices], y_total[indices])
         if indices.size > 0:
-            current_point.set_data(x_total[indices[-1]], y_total[indices[-1]])
+            current_point.set_data([x_total[indices[-1]]], [y_total[indices[-1]]])
         
         # Calcular día actual
         day_count = int(np.floor(t_frame / days))

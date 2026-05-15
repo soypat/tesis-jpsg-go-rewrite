@@ -10,32 +10,32 @@ import (
 
 // Physical constants for Earth-Moon-Sun system.
 const (
-	days   = 24 * 3600    // [s/day]
-	bigG   = 6.6742e-20   // [km³/kg/s²]
-	r12    = 384400.0     // [km] Earth-Moon distance
-	m1     = 5.974e24     // [kg] Earth mass
-	m2     = 7.348e22     // [kg] Moon mass
-	mu1    = 398600.0     // [km³/s²] Earth gravitational parameter
-	mu2    = 4903.02      // [km³/s²] Moon gravitational parameter
-	mS     = 1.989e30     // [kg] Sun mass
-	rB2S   = 149597870.7  // [km] Barycenter to Sun distance
-	rMoon  = 1737.0       // [km] Moon radius
-	rEarth = 6378.0       // [km] Earth radius
-	L1dist = 321710.0     // [km] L1 distance from Earth center
-	C1     = -1.676       // Jacobi constant for braking phase
+	days   = 24 * 3600   // [s/day]
+	bigG   = 6.6742e-20  // [km³/kg/s²]
+	r12    = 384400.0    // [km] Earth-Moon distance
+	m1     = 5.974e24    // [kg] Earth mass
+	m2     = 7.348e22    // [kg] Moon mass
+	mu1    = 398600.0    // [km³/s²] Earth gravitational parameter
+	mu2    = 4903.02     // [km³/s²] Moon gravitational parameter
+	mS     = 1.989e30    // [kg] Sun mass
+	rB2S   = 149597870.7 // [km] Barycenter to Sun distance
+	rMoon  = 1737.0      // [km] Moon radius
+	rEarth = 6378.0      // [km] Earth radius
+	L1dist = 321710.0    // [km] L1 distance from Earth center
+	C1     = -1.676      // Jacobi constant for braking phase
 )
 
 // Derived constants (computed at init).
 var (
-	mu  = mu1 + mu2            // [km³/s²] Combined gravitational parameter
-	pi1 = m1 / (m1 + m2)       // Earth mass fraction
-	pi2 = m2 / (m1 + m2)       // Moon mass fraction
-	W   = math.Sqrt(mu / (r12 * r12 * r12)) // [rad/s] Angular velocity of rotating frame
-	x1  = -pi2 * r12           // [km] Earth x-position in rotating frame
-	x2  = pi1 * r12            // [km] Moon x-position in rotating frame
-	muS = bigG * mS            // [km³/s²] Sun gravitational parameter
+	mu  = mu1 + mu2                             // [km³/s²] Combined gravitational parameter
+	pi1 = m1 / (m1 + m2)                        // Earth mass fraction
+	pi2 = m2 / (m1 + m2)                        // Moon mass fraction
+	W   = math.Sqrt(mu / (r12 * r12 * r12))     // [rad/s] Angular velocity of rotating frame
+	x1  = -pi2 * r12                            // [km] Earth x-position in rotating frame
+	x2  = pi1 * r12                             // [km] Moon x-position in rotating frame
+	muS = bigG * mS                             // [km³/s²] Sun gravitational parameter
 	nS  = math.Sqrt(muS / (rB2S * rB2S * rB2S)) // [rad/s] Sun mean motion
-	L1x = x1 + L1dist          // [km] L1 x-coordinate
+	L1x = x1 + L1dist                           // [km] L1 x-coordinate
 )
 
 // State represents spacecraft state in the rotating Earth-Moon frame.
@@ -302,10 +302,10 @@ var (
 // Returns the new suggested step size.
 func (ig *Integrator) Step(h float64) float64 {
 	const (
-		safety  = 0.9
-		minFac  = 0.2
-		maxFac  = 10.0
-		order   = 5.0
+		safety = 0.9
+		minFac = 0.2
+		maxFac = 10.0
+		order  = 5.0
 	)
 
 	t := ig.T
