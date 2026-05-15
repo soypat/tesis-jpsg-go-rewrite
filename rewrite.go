@@ -267,6 +267,10 @@ type Integrator struct {
 	// Step control
 	MinStep, MaxStep float64
 	ATol, RTol       float64
+
+	// Diagnostics
+	LastErrNorm float64 // error norm from most recent accepted step
+	StepCount   int     // incremented on each accepted step
 }
 
 // Dormand-Prince coefficients (RK45)
@@ -333,13 +337,15 @@ func (ig *Integrator) Step(h float64) float64 {
 		kPos[0], kVel[0], kM[0] = rates(t, s, phiS0)
 
 		for i := 1; i < 7; i++ {
-			// Match numpy: dy = dot(A[i,:i], K[:i]) * h  (FMA in the dot, h applied after)
+			// Match numpy: dy = dot(A[i,:i], K[:i]) * h  (standard += to match numpy C-loop)
 			var sumPos, sumVel md3.Vec
 			var sumMass float64
 			for j := 0; j < i; j++ {
-				sumPos = fma3(sumPos, dpA[i][j], kPos[j])
-				sumVel = fma3(sumVel, dpA[i][j], kVel[j])
-				sumMass = math.FMA(dpA[i][j], kM[j], sumMass)
+				sumPos.X += dpA[i][j] * kPos[j].X
+				sumPos.Y += dpA[i][j] * kPos[j].Y
+				sumVel.X += dpA[i][j] * kVel[j].X
+				sumVel.Y += dpA[i][j] * kVel[j].Y
+				sumMass += dpA[i][j] * kM[j]
 			}
 			ti := t + dpC[i]*h
 			si := State{
@@ -384,24 +390,45 @@ func (ig *Integrator) Step(h float64) float64 {
 		scVY := ig.ATol + ig.RTol*math.Max(math.Abs(s.Vel.Y), math.Abs(newVel.Y))
 		scaleM := ig.ATol + ig.RTol*math.Max(math.Abs(s.Mass), math.Abs(newM))
 
-		errNorm := math.Sqrt(((errPos.X/scPX)*(errPos.X/scPX) +
+		// Match scipy: rms_norm(v) = np.linalg.norm(v) / sqrt(n)
+		// = sqrt(sum(v_i^2)) / sqrt(5)  NOT sqrt(sum/5) — differ by 1 ULP.
+		sumSq := (errPos.X/scPX)*(errPos.X/scPX) +
 			(errPos.Y/scPY)*(errPos.Y/scPY) +
 			(errVel.X/scVX)*(errVel.X/scVX) +
 			(errVel.Y/scVY)*(errVel.Y/scVY) +
-			(errM/scaleM)*(errM/scaleM)) / 5)
+			(errM/scaleM)*(errM/scaleM)
+		errNorm := math.Sqrt(sumSq) / math.Sqrt(5)
 
 		// Step accepted?
 		if errNorm <= 1 {
 			ig.T = t + h
+			// scipy recomputes h = t_new - t inside _step_impl before applying factor.
+			// This can lose 1 ULP when t and h have similar magnitudes; mirror it here
+			// so the next step size matches scipy's output exactly.
+			hEff := ig.T - t
 			ig.State = State{Pos: newPos, Vel: newVel, Mass: newM}
+			ig.LastErrNorm = errNorm
+			ig.StepCount++
 
-			// Compute new step size
+			// Compute new step size using hEff (matching scipy's h_abs *= factor)
 			if errNorm == 0 {
-				return math.Min(h*maxFac, ig.MaxStep)
+				hNext := math.Min(hEff*maxFac, ig.MaxStep)
+				if ig.StepCount >= 3 && ig.StepCount <= 6 {
+					debugf("[Step %d→%d] h=%.17e hEff=%.17e en=0 hNext=%.17e hNext_bits=%016x\n",
+						ig.StepCount, ig.StepCount+1, h, hEff, hNext, math.Float64bits(hNext))
+				}
+				return hNext
 			}
-			factor := safety * math.Pow(errNorm, -1.0/order)
-			factor = math.Max(minFac, math.Min(maxFac, factor))
-			return math.Max(ig.MinStep, math.Min(ig.MaxStep, h*factor))
+			factorRaw := safety * math.Pow(errNorm, -1.0/order)
+			factorClamped := math.Max(minFac, math.Min(maxFac, factorRaw))
+			hNext := math.Max(ig.MinStep, math.Min(ig.MaxStep, hEff*factorClamped))
+			if ig.StepCount >= 3 && ig.StepCount <= 6 {
+				debugf("[Step %d→%d] h=%.17e hEff=%.17e en=%.17e factorClamped=%.17e hEff*fc=%.17e hEff*fc_bits=%016x hNext=%.17e hNext_bits=%016x\n",
+					ig.StepCount, ig.StepCount+1, h, hEff, errNorm, factorClamped,
+					hEff*factorClamped, math.Float64bits(hEff*factorClamped),
+					hNext, math.Float64bits(hNext))
+			}
+			return hNext
 		}
 
 		// Step rejected, reduce step size

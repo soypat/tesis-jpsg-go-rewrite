@@ -4,6 +4,31 @@ from scipy.integrate import solve_ivp
 import time
 from matplotlib.animation import FuncAnimation, PillowWriter
 
+# Patch scipy's norm to log every errNorm computed during integration.
+# errNorm[i-1] is the norm computed for step i (determines h_{i+1}).
+import struct as _struct
+from scipy.integrate._ivp import common as _ivp_common, rk as _ivp_rk
+_orig_norm = _ivp_common.norm
+_err_norm_log = []
+def _logging_norm(x):
+    result = _orig_norm(x)
+    _err_norm_log.append(float(result))
+    return result
+_ivp_common.norm = _logging_norm
+_ivp_rk.norm = _logging_norm
+
+# Patch RK45._step_impl to log raw h_abs BEFORE and AFTER each step call.
+# This gives us the raw h values without timestamp-difference artifacts.
+_rk_step_log = []  # list of (h_in, h_out, success) for every _step_impl call
+_orig_rk45_step_impl = _ivp_rk.RungeKutta._step_impl
+def _rk45_step_impl_logging(self):
+    h_in = float(self.h_abs)
+    result = _orig_rk45_step_impl(self)
+    h_out = float(self.h_abs)
+    _rk_step_log.append((h_in, h_out, result[0]))
+    return result
+_ivp_rk.RungeKutta._step_impl = _rk45_step_impl_logging
+
 plt.rcParams.update({'font.size': 8})
 
 #######################
@@ -321,13 +346,40 @@ def trayectoria():
             next_p1 += 20 * days
 
     # Bit-level step comparison: log-spaced indices matching Go's [P1 sNNNNN] prints.
+    # _err_norm_log[i-1] = errNorm computed during step i (drives h_{i+1})
     p1_debug_idx = list(range(15)) + [20, 30, 50, 100, 200, 500, 1000, 2000, 5000, 10000, len(sol1.t)-1]
     for idx in sorted(set(p1_debug_idx)):
         if idx < len(sol1.t):
             t = sol1.t[idx]
             s = sol1.y[:, idx]
             h = t - sol1.t[idx-1] if idx > 0 else 0.0
-            print(f"[P1 s{idx:5d}] t={t:.17e} h={h:.6e} x={s[0]:.17e} y={s[1]:.17e} vx={s[2]:.17e} vy={s[3]:.17e} m={s[4]:.17e}")
+            # select_initial_step calls norm 3 times before first step;
+            # errNorm for step k is at _err_norm_log[k + 2]  (k = 1,2,3,...)
+            en = _err_norm_log[idx + 2] if idx >= 1 and (idx + 2) < len(_err_norm_log) else 0.0
+            print(f"[P1 s{idx:5d}] t={t:.17e} h={h:.17e} x={s[0]:.17e} y={s[1]:.17e} vx={s[2]:.17e} vy={s[3]:.17e} m={s[4]:.17e} en={en:.17e}")
+
+    # Raw h_abs transitions from inside _step_impl (no timestamp-diff artifact).
+    # _rk_step_log[k] = (h_k_in, h_k_out, success) for the k-th _step_impl call.
+    # These map to Go's [Step K→K+1] prints where K = k+1 (1-indexed accepted step).
+    # scipy's select_initial_step is called BEFORE any _step_impl call, so
+    # _rk_step_log[0] = first actual step (Go StepCount 0→1 after accept).
+    # Go prints when StepCount ∈ {3,4,5,6} → log indices {2,3,4,5}.
+    print("[PY raw h transitions from _step_impl (Go StepCount 3→4 through 6→7):]")
+    for k in range(2, 7):
+        if k < len(_rk_step_log):
+            h_in, h_out, success = _rk_step_log[k]
+            bits_in  = _struct.unpack('Q', _struct.pack('d', h_in))[0]
+            bits_out = _struct.unpack('Q', _struct.pack('d', h_out))[0]
+            SAFETY, MIN_FACTOR, MAX_FACTOR = 0.9, 0.2, 10.0
+            en_k = _err_norm_log[k + 2] if (k + 2) < len(_err_norm_log) else 0.0
+            if en_k == 0:
+                factor = MAX_FACTOR
+            else:
+                factor = min(MAX_FACTOR, max(MIN_FACTOR, SAFETY * en_k**(-0.2)))
+            bits_factor = _struct.unpack('Q', _struct.pack('d', factor))[0]
+            h_times_factor = h_in * factor
+            bits_htf = _struct.unpack('Q', _struct.pack('d', h_times_factor))[0]
+            print(f"[PY Step {k+1}→{k+2}] h_in={h_in:.17e} h_in_bits={bits_in:016x} en={en_k:.17e} factor={factor:.17e} factor_bits={bits_factor:016x} h*factor={h_times_factor:.17e} h*factor_bits={bits_htf:016x} h_out={h_out:.17e} h_out_bits={bits_out:016x} ok={success}")
 
     # Fase 2: Coasting (motores apagados)
     t_phase2 = [sol1.t[-1], sol1.t[-1] + days * 650]

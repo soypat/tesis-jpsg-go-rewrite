@@ -10,11 +10,12 @@ import (
 
 // ParedesRecord stores one accepted RK45 step for trajectory output.
 type ParedesRecord struct {
-	Phase int     // 1–4
-	T     float64 // [s] time since mission start
-	Pos   md3.Vec // [km] position in rotating frame
-	Vel   md3.Vec // [km/s] velocity in rotating frame
-	Mass  float64 // [kg]
+	Phase   int     // 1–4
+	T       float64 // [s] time since mission start
+	Pos     md3.Vec // [km] position in rotating frame
+	Vel     md3.Vec // [km/s] velocity in rotating frame
+	Mass    float64 // [kg]
+	ErrNorm float64 // error norm from Step() — drives h_next
 }
 
 // GTOConfig holds initial conditions and simulation parameters for the
@@ -246,7 +247,7 @@ func (ig *Integrator) IntegrateUntilRecording(tf float64, events []EventFunc, ph
 		sPrev := ig.State
 		h = ig.Step(h)
 
-		records = append(records, ParedesRecord{Phase: phaseNum, T: ig.T, Pos: ig.State.Pos, Vel: ig.State.Vel, Mass: ig.State.Mass})
+		records = append(records, ParedesRecord{Phase: phaseNum, T: ig.T, Pos: ig.State.Pos, Vel: ig.State.Vel, Mass: ig.State.Mass, ErrNorm: ig.LastErrNorm})
 
 		for i, ev := range events {
 			curr := ev(ig.T, ig.State, ig.PhiS0)
@@ -324,8 +325,8 @@ func (cfg *GTOConfig) Calculate() GTOResult {
 			if idx > 0 {
 				h = r.T - p1[idx-1].T
 			}
-			debugf("[P1 s%5d] t=%.17e h=%.6e x=%.17e y=%.17e vx=%.17e vy=%.17e m=%.17e\n",
-				idx, r.T, h, r.Pos.X, r.Pos.Y, r.Vel.X, r.Vel.Y, r.Mass)
+			debugf("[P1 s%5d] t=%.17e h=%.17e x=%.17e y=%.17e vx=%.17e vy=%.17e m=%.17e en=%.17e\n",
+				idx, r.T, h, r.Pos.X, r.Pos.Y, r.Vel.X, r.Vel.Y, r.Mass, r.ErrNorm)
 		}
 	}
 
