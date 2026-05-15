@@ -46,6 +46,10 @@ m_motor = 1.875
 m_cap = 2.0
 tol = 1e-12
 
+def debug(args):
+    if True:
+        print(args)
+
 # -----------------------------
 # Funciones de tasa (derivadas)
 # -----------------------------
@@ -307,6 +311,14 @@ def trayectoria():
           - mu2/np.linalg.norm([f1_final[0]-pi_1*r12, f1_final[1]]))
     print(f"[P1 end] t={sol1.t[-1]:.10f} x={f1_final[0]:.10e} y={f1_final[1]:.10e} vx={f1_final[2]:.10e} vy={f1_final[3]:.10e} m={f1_final[4]:.10f}")
     print(f"[P1 end] Jacobi={J1:.12f} (thr=-1.63907788, residual={J1-(-1.63907788):.3e})")
+    print(f"[P1] steps={len(sol1.t)-1} avg_step={sol1.t[-1]/(len(sol1.t)-1):.1f}s")
+    for i in range(1, min(6, len(sol1.t))):
+        print(f"[P1] step[{i}] h={sol1.t[i]-sol1.t[i-1]:.6f}")
+    next_p1 = 0.0
+    for i, t in enumerate(sol1.t):
+        if t >= next_p1:
+            print(f"[P1 t={t/days:7.2f}d] x={sol1.y[0,i]:.8e} y={sol1.y[1,i]:.8e} vx={sol1.y[2,i]:.8e} vy={sol1.y[3,i]:.8e}")
+            next_p1 += 20 * days
 
     # Fase 2: Coasting (motores apagados)
     t_phase2 = [sol1.t[-1], sol1.t[-1] + days * 650]
@@ -380,7 +392,18 @@ def trayectoria():
     vy_phase4 = sol4.y[3]
     r_rel_phase4 = np.sqrt((x_phase4 - x2)**2 + (y_phase4)**2)
     E_capture_phase4 = 0.5 * (vx_phase4**2 + vy_phase4**2) - mu2 / r_rel_phase4
-
+    end_time = time.time()
+    totalTime = end_time - start_time
+    print('Tiempo que demoró -- ', totalTime)
+    print('Masa final ', sol4.y[4,-1])
+    detalles = {
+        'phi': phi,
+        'tiempo_total': totalTime,
+        'masa_final': sol4.y[4, -1],
+        'exito': True,
+        'time_exec': totalTime
+    }
+    return detalles
     plt.figure()
     plt.plot(t_phase2_vals[mask_phase2] / days, E_capture_phase2[mask_phase2], 'r-', 
              label="Energía (último ¼ de Fase 2)")
@@ -393,10 +416,8 @@ def trayectoria():
     plt.grid(True)
     plt.show()
     
-    end_time = time.time()
-    totalTime = end_time - start_time
-    print('Tiempo que demoró -- ', totalTime)
-    print('Masa final ', sol4.y[4,-1])
+    
+   
     
     # Gráfico de la trayectoria completa con fondo de potencial de Jacobi
     x_vals = np.linspace(-100000, 500000, 500)
@@ -433,13 +454,7 @@ def trayectoria():
     animar_trayectoria_dual([sol1, sol2, sol3, sol4], t_threshold, chunk_interval_initial=2, chunk_interval_secondary=0.25,
                              nombre_archivo='trayectoria_dual.gif')
 
-    detalles = {
-        'phi': phi,
-        'tiempo_total': totalTime,
-        'masa_final': sol4.y[4, -1],
-        'exito': True,
-        'time_exec': totalTime
-    }
+    
     return detalles
 
 if __name__ == '__main__':

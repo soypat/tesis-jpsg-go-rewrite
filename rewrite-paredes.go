@@ -142,11 +142,68 @@ func (cfg *GTOConfig) GTOInitialState() State {
 	}
 }
 
+// SelectInitialStep computes a safe first step size following Hairer, Norsett
+// & Wanner §II.4 — the same algorithm used by scipy's select_initial_step.
+// Uses per-component scaling (sc_i = ATol + |y_i|·RTol) unlike Step() which
+// uses vector-norm scaling; this matches scipy's step-size controller exactly.
+func (ig *Integrator) SelectInitialStep() float64 {
+	const (
+		errOrder = 4.0 // RK45 error-estimator order (scipy: error_estimator_order)
+		nComp    = 5.0 // active state components for this 2D problem: x,y,vx,vy,m
+		// (z and vz are always 0; including them would dilute the rms by sqrt(5/7)
+		// and shift the initial h ~3.4% away from scipy's value)
+	)
+	s := ig.State
+	dPos0, dVel0, dm0 := ig.Rates(ig.T, s, ig.PhiS0)
+
+	// Per-component scale factors.
+	atol, rtol := ig.ATol, ig.RTol
+	sc := [7]float64{
+		atol + math.Abs(s.Pos.X)*rtol, atol + math.Abs(s.Pos.Y)*rtol, atol + math.Abs(s.Pos.Z)*rtol,
+		atol + math.Abs(s.Vel.X)*rtol, atol + math.Abs(s.Vel.Y)*rtol, atol + math.Abs(s.Vel.Z)*rtol,
+		atol + math.Abs(s.Mass)*rtol,
+	}
+	rmsNorm := func(px, py, pz, vx, vy, vz, m float64) float64 {
+		return math.Sqrt((px*px+py*py+pz*pz+vx*vx+vy*vy+vz*vz+m*m)/nComp)
+	}
+
+	d0 := rmsNorm(s.Pos.X/sc[0], s.Pos.Y/sc[1], s.Pos.Z/sc[2],
+		s.Vel.X/sc[3], s.Vel.Y/sc[4], s.Vel.Z/sc[5], s.Mass/sc[6])
+	d1 := rmsNorm(dPos0.X/sc[0], dPos0.Y/sc[1], dPos0.Z/sc[2],
+		dVel0.X/sc[3], dVel0.Y/sc[4], dVel0.Z/sc[5], dm0/sc[6])
+
+	var h0 float64
+	if d0 < 1e-5 || d1 < 1e-5 {
+		h0 = 1e-6
+	} else {
+		h0 = 0.01 * d0 / d1
+	}
+
+	// One explicit Euler probe step to estimate second derivative.
+	s1 := State{
+		Pos:  md3.Add(s.Pos, md3.Scale(h0, dPos0)),
+		Vel:  md3.Add(s.Vel, md3.Scale(h0, dVel0)),
+		Mass: s.Mass + h0*dm0,
+	}
+	dPos1, dVel1, dm1 := ig.Rates(ig.T+h0, s1, ig.PhiS0)
+	ddPos, ddVel, ddm := md3.Sub(dPos1, dPos0), md3.Sub(dVel1, dVel0), dm1-dm0
+	d2 := rmsNorm(ddPos.X/sc[0], ddPos.Y/sc[1], ddPos.Z/sc[2],
+		ddVel.X/sc[3], ddVel.Y/sc[4], ddVel.Z/sc[5], ddm/sc[6]) / h0
+
+	var h1 float64
+	if maxD := math.Max(d1, d2); maxD <= 1e-5 {
+		h1 = math.Max(1e-6, h0*1e-3)
+	} else {
+		h1 = math.Pow(0.01/maxD, 1/(errOrder+1))
+	}
+	return math.Min(100*h0, h1)
+}
+
 // IntegrateUntilRecording integrates until tf or an event triggers, recording
 // every accepted RK45 step. Returns the triggered event index (-1 if none)
 // and all records for this phase including the refined event endpoint.
 func (ig *Integrator) IntegrateUntilRecording(tf float64, events []EventFunc, phaseNum int) (eventIdx int, records []ParedesRecord) {
-	h := ig.MaxStep
+	h := math.Min(ig.SelectInitialStep(), ig.MaxStep)
 	eventIdx = -1
 
 	records = append(records, ParedesRecord{Phase: phaseNum, T: ig.T, Pos: ig.State.Pos, Vel: ig.State.Vel, Mass: ig.State.Mass})
@@ -201,7 +258,7 @@ func (cfg *GTOConfig) Calculate() GTOResult {
 		State:   cfg.GTOInitialState(),
 		PhiS0:   0,
 		Rates:   RatesThrustEM(th),
-		MinStep: 1,
+		MinStep: 0,
 		MaxStep: 450,
 		ATol:    cfg.Tol,
 		RTol:    1e-9,
@@ -218,6 +275,18 @@ func (cfg *GTOConfig) Calculate() GTOResult {
 		ig.T, ig.State.Pos.X, ig.State.Pos.Y, ig.State.Vel.X, ig.State.Vel.Y, ig.State.Mass)
 	debugf("[P1 end] Jacobi=%.12f (thr=%.8f, residual=%.3e)\n",
 		JacobiConstantEM(ig.State), cfg.JacobiThr, JacobiConstantEM(ig.State)-cfg.JacobiThr)
+	debugf("[P1] steps=%d avg_step=%.1fs\n", len(p1)-1, ig.T/float64(len(p1)-1))
+	for i := 1; i <= 5 && i < len(p1); i++ {
+		debugf("[P1] step[%d] h=%.6f\n", i, p1[i].T-p1[i-1].T)
+	}
+	nextP1 := 0.0
+	for _, r := range p1 {
+		if r.T >= nextP1 {
+			debugf("[P1 t=%7.2fd] x=%.8e y=%.8e vx=%.8e vy=%.8e\n",
+				r.T/days, r.Pos.X, r.Pos.Y, r.Vel.X, r.Vel.Y)
+			nextP1 += 20 * days
+		}
+	}
 	if evIdx < 0 {
 		result.TotalTime = ig.T
 		result.FinalMass = ig.State.Mass
