@@ -206,11 +206,18 @@ func (cfg *GTOConfig) Calculate() GTOResult {
 		ATol:    cfg.Tol,
 		RTol:    1e-9,
 	}
+	s0 := ig.State
+	debugf("[P0] IC: x=%.10e y=%.10e vx=%.10e vy=%.10e m=%.10f\n",
+		s0.Pos.X, s0.Pos.Y, s0.Vel.X, s0.Vel.Y, s0.Mass)
 
 	// Phase 1: prograde thrust until Jacobi threshold.
 	evIdx, p1 := ig.IntegrateUntilRecording(float64(days*360*4), []EventFunc{EventJacobiEM(cfg.JacobiThr)}, 1)
 	result.Phase1 = p1
 	fmt.Printf("Fase 1 completada, tiempo de evento: [array([%.7f])] (5, %d)\n", ig.T, len(p1))
+	debugf("[P1 end] t=%.10f x=%.10e y=%.10e vx=%.10e vy=%.10e m=%.10f\n",
+		ig.T, ig.State.Pos.X, ig.State.Pos.Y, ig.State.Vel.X, ig.State.Vel.Y, ig.State.Mass)
+	debugf("[P1 end] Jacobi=%.12f (thr=%.8f, residual=%.3e)\n",
+		JacobiConstantEM(ig.State), cfg.JacobiThr, JacobiConstantEM(ig.State)-cfg.JacobiThr)
 	if evIdx < 0 {
 		result.TotalTime = ig.T
 		result.FinalMass = ig.State.Mass
@@ -223,6 +230,19 @@ func (cfg *GTOConfig) Calculate() GTOResult {
 	evIdx, p2 := ig.IntegrateUntilRecording(ig.T+float64(days*650), []EventFunc{EventL1EM}, 2)
 	result.Phase2 = p2
 	fmt.Printf("Fase 2 completada, tiempo de evento: [array([%.8f])] (5, %d)\n", ig.T, len(p2))
+	// Print Phase 2 trajectory at 5-day intervals (post-hoc over records).
+	nextPrint := p2[0].T
+	for _, r := range p2 {
+		if r.T >= nextPrint {
+			debugf("[P2 t=%6.2fd] x=%.6e y=%.6e dist_earth=%.3f\n",
+				r.T/days, r.Pos.X, r.Pos.Y,
+				math.Hypot(r.Pos.X-x1, r.Pos.Y))
+			nextPrint += 5 * days
+		}
+	}
+	debugf("[P2 end] t=%.10f dist_earth=%.10f L1dist=%.1f residual=%.6e\n",
+		ig.T, math.Hypot(ig.State.Pos.X-x1, ig.State.Pos.Y),
+		L1dist, math.Hypot(ig.State.Pos.X-x1, ig.State.Pos.Y)-L1dist)
 	if evIdx < 0 {
 		fmt.Println("No se logró llegar a L1")
 		result.TotalTime = ig.T

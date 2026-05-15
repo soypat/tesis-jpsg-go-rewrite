@@ -294,22 +294,37 @@ def trayectoria():
     vy0 = v0 * (np.sin(gamma_rad) * np.sin(phi_rad) + np.cos(gamma_rad) * np.cos(phi_rad))
     m0_val = 12
     f0 = [x0, y0, vx0, vy0, m0_val]
-    
+    print(f"[P0] IC: x={x0:.10e} y={y0:.10e} vx={vx0:.10e} vy={vy0:.10e} m={m0_val:.10f}")
+
     # Fase 1: Trayectoria con empuje
     sol1 = solve_ivp(rates, [t0, tf], f0, method='RK45', events=jacobiC,
                      rtol=1e-9, atol=tol, max_step=450)
     print("Fase 1 completada, tiempo de evento:", sol1.t_events, sol1.y.shape)
     f1_final = sol1.y[:, -1]
+    J1 = (0.5*(f1_final[2]**2+f1_final[3]**2)
+          - 0.5*W**2*(f1_final[0]**2+f1_final[1]**2)
+          - mu1/np.linalg.norm([f1_final[0]+pi_2*r12, f1_final[1]])
+          - mu2/np.linalg.norm([f1_final[0]-pi_1*r12, f1_final[1]]))
+    print(f"[P1 end] t={sol1.t[-1]:.10f} x={f1_final[0]:.10e} y={f1_final[1]:.10e} vx={f1_final[2]:.10e} vy={f1_final[3]:.10e} m={f1_final[4]:.10f}")
+    print(f"[P1 end] Jacobi={J1:.12f} (thr=-1.63907788, residual={J1-(-1.63907788):.3e})")
 
     # Fase 2: Coasting (motores apagados)
     t_phase2 = [sol1.t[-1], sol1.t[-1] + days * 650]
     sol2 = solve_ivp(rates0, t_phase2, f1_final, method='RK45', events=lagrian1,
                      rtol=1e-9, atol=tol, max_step=200)
     print("Fase 2 completada, tiempo de evento:", sol2.t_events, sol2.y.shape)
+    next_print = sol2.t[0]
+    for i, t in enumerate(sol2.t):
+        if t >= next_print:
+            dist = np.linalg.norm([sol2.y[0,i]+pi_2*r12, sol2.y[1,i]])
+            print(f"[P2 t={t/days:6.2f}d] x={sol2.y[0,i]:.6e} y={sol2.y[1,i]:.6e} dist_earth={dist:.3f}")
+            next_print += 5 * days
+    f2_final = sol2.y[:, -1]
+    dist2 = np.linalg.norm([f2_final[0]+pi_2*r12, f2_final[1]])
+    print(f"[P2 end] t={sol2.t[-1]:.10f} dist_earth={dist2:.10f} L1dist=321710.0 residual={dist2-L1:.6e}")
     if sol2.t_events[0].size == 0:
         print('No se logró llegar a L1')
         exito = False
-        f2_final = sol2.y[:, -1]
         tiempo_total = sol2.t[-1]
         masa_final = sol2.y[4, -1]
         detalles = {
@@ -322,7 +337,6 @@ def trayectoria():
         return detalles
     else:
         print('Se alcanzó L1 CORRECTAMENTE')
-        f2_final = sol2.y[:, -1]
 
     # Fase 3: Frenado para inserción lunar
     t_phase3 = [sol2.t[-1], sol2.t[-1] + days * 25]

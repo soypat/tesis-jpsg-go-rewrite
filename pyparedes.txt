@@ -1,0 +1,14 @@
+[P0] IC: x=3.8703620343e+04 y=5.6819503403e+02 vx=-2.0140494254e-02 vy=1.5374639961e+00 m=12.0000000000
+Fase 1 completada, tiempo de evento: [array([17412060.9101902])] (5, 47152)
+[P1 end] t=17412060.9101902023 x=-1.3770268711e+05 y=1.6926571788e+05 vx=-8.6753270395e-01 vy=-1.6866550945e-01 m=10.0631206752
+[P1 end] Jacobi=-1.639077880000 (thr=-1.63907788, residual=2.220e-16)
+Fase 2 completada, tiempo de evento: [array([19465842.50779134])] (5, 10274)
+[P2 t=201.53d] x=-1.377027e+05 y=1.692657e+05 dist_earth=215286.795
+[P2 t=206.53d] x=-2.921350e+05 y=1.084411e+05 dist_earth=307238.054
+[P2 t=211.53d] x=-1.807116e+05 y=-8.040977e+04 dist_earth=193535.874
+[P2 t=216.53d] x=2.239895e+05 y=-1.298421e+05 dist_earth=262953.291
+[P2 t=221.53d] x=3.029263e+05 y=-5.637202e+04 dist_earth=312719.860
+[P2 end] t=19465842.5077913366 dist_earth=321710.0000000002 L1dist=321710.0 residual=2.328306e-10
+Se alcanzó L1 CORRECTAMENTE
+Fase 3 completada, tiempo de evento: [array([20275429.92140324])] (5, 164)
+Fase 4 completada, tiempo final: 22003429.92140324 (5, 17285)
