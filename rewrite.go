@@ -356,14 +356,23 @@ func (ig *Integrator) Step(h float64) float64 {
 		newVel = md3.Add(s.Vel, newVel)
 		newM += s.Mass
 
-		// Error norm (scaled)
-		scalePos := ig.ATol + ig.RTol*math.Max(md3.Norm(s.Pos), md3.Norm(newPos))
-		scaleVel := ig.ATol + ig.RTol*math.Max(md3.Norm(s.Vel), md3.Norm(newVel))
+		// Error norm — per-component scaling matches scipy's default RK45 behaviour.
+		// scale_i = ATol + RTol * max(|y_i|, |y_i_new|)
+		scPX := ig.ATol + ig.RTol*math.Max(math.Abs(s.Pos.X), math.Abs(newPos.X))
+		scPY := ig.ATol + ig.RTol*math.Max(math.Abs(s.Pos.Y), math.Abs(newPos.Y))
+		scPZ := ig.ATol + ig.RTol*math.Max(math.Abs(s.Pos.Z), math.Abs(newPos.Z))
+		scVX := ig.ATol + ig.RTol*math.Max(math.Abs(s.Vel.X), math.Abs(newVel.X))
+		scVY := ig.ATol + ig.RTol*math.Max(math.Abs(s.Vel.Y), math.Abs(newVel.Y))
+		scVZ := ig.ATol + ig.RTol*math.Max(math.Abs(s.Vel.Z), math.Abs(newVel.Z))
 		scaleM := ig.ATol + ig.RTol*math.Max(math.Abs(s.Mass), math.Abs(newM))
 
-		errNorm := math.Sqrt((md3.Norm2(errPos)/(scalePos*scalePos) +
-			md3.Norm2(errVel)/(scaleVel*scaleVel) +
-			errM*errM/(scaleM*scaleM)) / 7)
+		errNorm := math.Sqrt(((errPos.X/scPX)*(errPos.X/scPX)+
+			(errPos.Y/scPY)*(errPos.Y/scPY)+
+			(errPos.Z/scPZ)*(errPos.Z/scPZ)+
+			(errVel.X/scVX)*(errVel.X/scVX)+
+			(errVel.Y/scVY)*(errVel.Y/scVY)+
+			(errVel.Z/scVZ)*(errVel.Z/scVZ)+
+			(errM/scaleM)*(errM/scaleM))/7)
 
 		// Step accepted?
 		if errNorm <= 1 {
